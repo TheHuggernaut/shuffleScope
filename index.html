@@ -1,10 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script>
-  window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
-</script>
-<script defer src="/_vercel/speed-insights/script.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ShuffleScope — WoW PvP Analyzer</title>
@@ -1812,38 +1808,172 @@ const StrategyKB = {
 };
 
 if (typeof module !== 'undefined') module.exports = StrategyKB;
+
 // ============================================================
 // COMBAT LOG PARSER
+// All cooldown definitions pulled from KB — no hardcoding here
 // ============================================================
 
+// DR category spell lists — these are log spell name fragments,
+// kept here because they are log-format knowledge, not strategy knowledge
 const DR_CATEGORIES = {
-  stun: ['CHEAPSHOT','KNEECAPPER','KIDNEY_SHOT','SHADOWSTEP','CHARGE_STUN','IMPACT','KIDNEY','CHEAP_SHOT','BASHING','BASH','HAMMER_OF_JUSTICE','WAR_STOMP','INTIMIDATION','STARFALL','MAIM','MIGHTY_BASH'],
-  incapacitate: ['BLIND','SAP','GOUGE','HEX','FREEZING_TRAP','FREEZE','DRAGON_S_BREATH','POLYMORPH','REPENTANCE','MIND_CONTROL','TURN_EVIL'],
-  disorient: ['FEAR','HOWL_OF_TERROR','PSYCHIC_SCREAM','INTIMIDATING_SHOUT','SEDUCTION','DEATH_COIL'],
-  silence: ['SILENCE','COUNTERSPELL','KICK','PUMMEL','MIND_FREEZE','WIND_SHEAR','SOLAR_BEAM','REBUKE'],
-  root: ['ENTANGLING_ROOTS','FROST_NOVA','FREEZE','EARTHBIND','CHAINS_OF_ICE','FROSTBITE']
+  stun: [
+    'CHEAP_SHOT','CHEAPSHOT','KIDNEY_SHOT','HAMMER_OF_JUSTICE','STORM_BOLT',
+    'CHARGE_STUN','WAR_STOMP','BASH','MIGHTY_BASH','MAIM','INTIMIDATION',
+    'SHADOWFURY','REMORSELESS_WINTER','CHAOS_NOVA','LEG_SWEEP','PARALYSIS',
+    'ASPHYXIATE','GNAW','AXE_TOSS','CAPACITOR_TOTEM','SHOCKWAVE',
+    'IMPACT','DEEP_FREEZE','INTERCEPT','INTERCEPT_STUN',
+  ],
+  incapacitate: [
+    'SAP','BLIND','GOUGE','POLYMORPH','HEX','FREEZING_TRAP','FREEZE',
+    'REPENTANCE','IMPRISON','PARALYSIS','INCAPACITATING_ROAR',
+    'TURN_EVIL','MIND_CONTROL','SEDUCTION','SLEEP','HIBERNATE',
+    'HOLY_WORD_CHASTISE','DRAGON_S_BREATH',
+  ],
+  disorient: [
+    'FEAR','HOWL_OF_TERROR','PSYCHIC_SCREAM','INTIMIDATING_SHOUT',
+    'DEATH_COIL','CYCLONE','OPPRESSING_ROAR','MORTAL_COIL',
+    'SIGIL_OF_MISERY','BLINDING_LIGHT',
+  ],
+  silence: [
+    'SILENCE','COUNTERSPELL','KICK','PUMMEL','MIND_FREEZE','WIND_SHEAR',
+    'SOLAR_BEAM','REBUKE','SKULL_BASH','SIGIL_OF_SILENCE','GARROTE',
+    'AVENGERS_SHIELD','STRANGULATE',
+  ],
+  root: [
+    'ENTANGLING_ROOTS','FROST_NOVA','FREEZE','EARTHBIND','CHAINS_OF_ICE',
+    'FROSTBITE','BINDING_SHOT','GRASPING_VINES','THUNDERSTRUCK',
+    'LANDSLIDE','RING_OF_FROST',
+  ],
 };
 
-const DR_DECAY = 18000; // 18 seconds in ms
-const DR_HALF_THRESHOLDS = [1.0, 0.5, 0.25, 0.0]; // full, half, quarter, immune
+const DR_DECAY = 18000;
 
-const MAJOR_COOLDOWNS = {
-  'AVENGING_WRATH': { name: 'Avenging Wrath', duration: 20000, type: 'offensive' },
-  'COMBUSTION': { name: 'Combustion', duration: 12000, type: 'offensive' },
-  'VENDETTA': { name: 'Vendetta', duration: 20000, type: 'offensive' },
-  'WINGS': { name: 'Wings', duration: 20000, type: 'offensive' },
-  'DARK_SOUL': { name: 'Dark Soul', duration: 20000, type: 'offensive' },
-  'COLOSSUS_SMASH': { name: 'Colossus Smash', duration: 8000, type: 'offensive' },
-  'SYMBOLS_OF_DEATH': { name: 'Symbols of Death', duration: 45000, type: 'offensive' },
-  'RECKLESSNESS': { name: 'Recklessness', duration: 12000, type: 'offensive' },
-  'INCARNATION': { name: 'Incarnation', duration: 30000, type: 'offensive' },
-  'SHADOW_DANCE': { name: 'Shadow Dance', duration: 8000, type: 'offensive' },
-  'BERSERKING': { name: 'Berserking', duration: 12000, type: 'offensive' },
-  'ICEBLOCK': { name: 'Ice Block', duration: 10000, type: 'defensive' },
-  'DIVINE_SHIELD': { name: 'Divine Shield', duration: 8000, type: 'defensive' },
-  'EVASION': { name: 'Evasion', duration: 10000, type: 'defensive' },
-  'BLUR': { name: 'Blur', duration: 10000, type: 'defensive' },
+// ── COOLDOWN REGISTRY ────────────────────────────────────────
+// Single source of truth for every trackable cooldown.
+// type: 'offensive' | 'defensive' | 'utility'
+// duration: buff duration in ms (approximate, for timeline rendering)
+// The parser uses the log spell name (key) to detect usage.
+
+const COOLDOWN_REGISTRY = {
+  // ── Rogue ──
+  'SYMBOLS_OF_DEATH':       { name: 'Symbols of Death',       type: 'offensive',  duration: 45000, specs: ['subtlety_rogue'] },
+  'SHADOW_DANCE':           { name: 'Shadow Dance',            type: 'offensive',  duration:  8000, specs: ['subtlety_rogue'] },
+  'VENDETTA':               { name: 'Vendetta',                type: 'offensive',  duration: 20000, specs: ['assassination_rogue'] },
+  'ADRENALINE_RUSH':        { name: 'Adrenaline Rush',         type: 'offensive',  duration: 20000, specs: ['outlaw_rogue'] },
+  'BETWEEN_THE_EYES':       { name: 'Between the Eyes',        type: 'offensive',  duration:  3000, specs: ['outlaw_rogue'] },
+  'EVASION':                { name: 'Evasion',                 type: 'defensive',  duration: 10000, specs: ['subtlety_rogue','assassination_rogue','outlaw_rogue'] },
+  'CLOAK_OF_SHADOWS':       { name: 'Cloak of Shadows',        type: 'defensive',  duration:  5000, specs: ['subtlety_rogue','assassination_rogue','outlaw_rogue'] },
+  'VANISH':                 { name: 'Vanish',                  type: 'utility',    duration:  3000, specs: ['subtlety_rogue','assassination_rogue','outlaw_rogue'] },
+
+  // ── Mage ──
+  'COMBUSTION':             { name: 'Combustion',              type: 'offensive',  duration: 12000, specs: ['fire_mage'] },
+  'ICY_VEINS':              { name: 'Icy Veins',               type: 'offensive',  duration: 25000, specs: ['frost_mage'] },
+  'ARCANE_SURGE':           { name: 'Arcane Surge',            type: 'offensive',  duration: 15000, specs: ['arcane_mage'] },
+  'TOUCH_OF_THE_MAGI':      { name: 'Touch of the Magi',       type: 'offensive',  duration: 10000, specs: ['arcane_mage'] },
+  'ICE_BLOCK':              { name: 'Ice Block',               type: 'defensive',  duration: 10000, specs: ['fire_mage','frost_mage','arcane_mage'] },
+  'COLD_SNAP':              { name: 'Cold Snap',               type: 'defensive',  duration:     0, specs: ['frost_mage'] },
+
+  // ── Warrior ──
+  'RECKLESSNESS':           { name: 'Recklessness',            type: 'offensive',  duration: 12000, specs: ['arms_warrior','fury_warrior'] },
+  'AVATAR':                 { name: 'Avatar',                  type: 'offensive',  duration: 20000, specs: ['arms_warrior','fury_warrior','protection_warrior'] },
+  'BLADESTORM':             { name: 'Bladestorm',              type: 'offensive',  duration:  6000, specs: ['arms_warrior'] },
+  'SPEAR_OF_BASTION':       { name: 'Spear of Bastion',        type: 'offensive',  duration:  4000, specs: ['arms_warrior'] },
+  'RAVAGER':                { name: 'Ravager',                 type: 'offensive',  duration:  7000, specs: ['arms_warrior','protection_warrior'] },
+  'COLOSSUS_SMASH':         { name: 'Colossus Smash',          type: 'offensive',  duration:  8000, specs: ['arms_warrior'] },
+  'WARBREAKER':             { name: 'Warbreaker',              type: 'offensive',  duration:  8000, specs: ['arms_warrior'] },
+  'DIE_BY_THE_SWORD':       { name: 'Die by the Sword',        type: 'defensive',  duration:  8000, specs: ['arms_warrior'] },
+  'SPELL_REFLECTION':       { name: 'Spell Reflection',        type: 'defensive',  duration:  5000, specs: ['arms_warrior','fury_warrior','protection_warrior'] },
+
+  // ── Paladin ──
+  'AVENGING_WRATH':         { name: 'Avenging Wrath',          type: 'offensive',  duration: 20000, specs: ['retribution_paladin','holy_paladin'] },
+  'WINGS':                  { name: 'Avenging Wrath',          type: 'offensive',  duration: 20000, specs: ['retribution_paladin','holy_paladin'] }, // alt log name
+  'DIVINE_TOLL':            { name: 'Divine Toll',             type: 'offensive',  duration:     0, specs: ['retribution_paladin','holy_paladin'] },
+  'DIVINE_SHIELD':          { name: 'Divine Shield',           type: 'defensive',  duration:  8000, specs: ['holy_paladin','retribution_paladin','protection_paladin'] },
+  'BLESSING_OF_PROTECTION': { name: 'Blessing of Protection',  type: 'defensive',  duration: 10000, specs: ['holy_paladin','retribution_paladin','protection_paladin'] },
+  'LAY_ON_HANDS':           { name: 'Lay on Hands',            type: 'defensive',  duration:     0, specs: ['holy_paladin'] },
+
+  // ── Priest ──
+  'VOID_ERUPTION':          { name: 'Voidform',                type: 'offensive',  duration: 15000, specs: ['shadow_priest'] },
+  'DARK_ASCENSION':         { name: 'Dark Ascension',          type: 'offensive',  duration: 20000, specs: ['shadow_priest'] },
+  'PAIN_SUPPRESSION':       { name: 'Pain Suppression',        type: 'defensive',  duration:  8000, specs: ['discipline_priest'] },
+  'RAPTURE':                { name: 'Rapture',                 type: 'defensive',  duration: 10000, specs: ['discipline_priest'] },
+  'DISPERSION':             { name: 'Dispersion',              type: 'defensive',  duration:  6000, specs: ['shadow_priest'] },
+  'GUARDIAN_SPIRIT':        { name: 'Guardian Spirit',         type: 'defensive',  duration: 10000, specs: ['holy_priest'] },
+
+  // ── Druid ──
+  'CELESTIAL_ALIGNMENT':    { name: 'Celestial Alignment',     type: 'offensive',  duration: 20000, specs: ['balance_druid'] },
+  'INCARNATION_CHOSEN':     { name: 'Incarnation: Chosen of Elune', type: 'offensive', duration: 30000, specs: ['balance_druid'] },
+  'BERSERK':                { name: 'Berserk',                 type: 'offensive',  duration: 20000, specs: ['feral_druid','guardian_druid'] },
+  'INCARNATION_KING':       { name: 'Incarnation: King of the Jungle', type: 'offensive', duration: 30000, specs: ['feral_druid'] },
+  'TRANQUILITY':            { name: 'Tranquility',             type: 'defensive',  duration:  8000, specs: ['restoration_druid'] },
+  'IRONBARK':               { name: 'Ironbark',                type: 'defensive',  duration: 12000, specs: ['restoration_druid','feral_druid','balance_druid'] },
+  'BARKSKIN':               { name: 'Barkskin',                type: 'defensive',  duration: 12000, specs: ['balance_druid','feral_druid','guardian_druid','restoration_druid'] },
+
+  // ── Shaman ──
+  'ASCENDANCE_ELE':         { name: 'Ascendance',              type: 'offensive',  duration: 15000, specs: ['elemental_shaman'] },
+  'ASCENDANCE_ENH':         { name: 'Ascendance',              type: 'offensive',  duration: 15000, specs: ['enhancement_shaman'] },
+  'STORMKEEPER':            { name: 'Stormkeeper',             type: 'offensive',  duration: 15000, specs: ['elemental_shaman'] },
+  'FERAL_SPIRIT':           { name: 'Feral Spirit',            type: 'offensive',  duration: 15000, specs: ['enhancement_shaman'] },
+  'SPIRIT_LINK_TOTEM':      { name: 'Spirit Link Totem',       type: 'defensive',  duration:  6000, specs: ['restoration_shaman'] },
+  'EARTHEN_WALL_TOTEM':     { name: 'Earthen Wall Totem',      type: 'defensive',  duration: 15000, specs: ['restoration_shaman'] },
+
+  // ── Hunter ──
+  'BESTIAL_WRATH':          { name: 'Bestial Wrath',           type: 'offensive',  duration: 15000, specs: ['beast_mastery_hunter'] },
+  'TRUESHOT':               { name: 'Trueshot',                type: 'offensive',  duration: 15000, specs: ['marksmanship_hunter'] },
+  'COORDINATED_ASSAULT':    { name: 'Coordinated Assault',     type: 'offensive',  duration: 20000, specs: ['survival_hunter'] },
+  'ASPECT_OF_THE_TURTLE':   { name: 'Aspect of the Turtle',    type: 'defensive',  duration:  8000, specs: ['beast_mastery_hunter','marksmanship_hunter','survival_hunter'] },
+
+  // ── Warlock ──
+  'SUMMON_INFERNAL':        { name: 'Summon Infernal',         type: 'offensive',  duration: 30000, specs: ['destruction_warlock'] },
+  'DARK_SOUL_INSTABILITY':  { name: 'Dark Soul: Instability',  type: 'offensive',  duration: 20000, specs: ['destruction_warlock'] },
+  'DARK_SOUL_MISERY':       { name: 'Dark Soul: Misery',       type: 'offensive',  duration: 20000, specs: ['affliction_warlock'] },
+  'DARKGLARE':              { name: 'Summon Darkglare',        type: 'offensive',  duration: 20000, specs: ['affliction_warlock'] },
+  'SUMMON_DARKGLARE':       { name: 'Summon Darkglare',        type: 'offensive',  duration: 20000, specs: ['affliction_warlock'] },
+  'TYRANT':                 { name: 'Demonic Tyrant',          type: 'offensive',  duration: 15000, specs: ['demonology_warlock'] },
+  'SUMMON_DEMONIC_TYRANT':  { name: 'Demonic Tyrant',          type: 'offensive',  duration: 15000, specs: ['demonology_warlock'] },
+  'UNENDING_RESOLVE':       { name: 'Unending Resolve',        type: 'defensive',  duration:  8000, specs: ['affliction_warlock','destruction_warlock','demonology_warlock'] },
+
+  // ── Death Knight ──
+  'PILLAR_OF_FROST':        { name: 'Pillar of Frost',         type: 'offensive',  duration: 12000, specs: ['frost_dk'] },
+  'EMPOWER_RUNE_WEAPON':    { name: 'Empower Rune Weapon',     type: 'offensive',  duration: 20000, specs: ['frost_dk'] },
+  'APOCALYPSE':             { name: 'Apocalypse',              type: 'offensive',  duration:     0, specs: ['unholy_dk'] },
+  'DARK_TRANSFORMATION':    { name: 'Dark Transformation',     type: 'offensive',  duration: 20000, specs: ['unholy_dk'] },
+  'ICEBOUND_FORTITUDE':     { name: 'Icebound Fortitude',      type: 'defensive',  duration:  8000, specs: ['frost_dk','unholy_dk','blood_dk'] },
+  'VAMPIRIC_BLOOD':         { name: 'Vampiric Blood',          type: 'defensive',  duration: 10000, specs: ['blood_dk'] },
+  'ARMY_OF_THE_DEAD':       { name: 'Army of the Dead',        type: 'offensive',  duration: 40000, specs: ['unholy_dk'] },
+
+  // ── Demon Hunter ──
+  'METAMORPHOSIS':          { name: 'Metamorphosis',           type: 'offensive',  duration: 30000, specs: ['havoc_dh'] },
+  'EYE_BEAM':               { name: 'Eye Beam',                type: 'offensive',  duration:  3000, specs: ['havoc_dh'] },
+  'BLUR':                   { name: 'Blur',                    type: 'defensive',  duration: 10000, specs: ['havoc_dh'] },
+  'DARKNESS':               { name: 'Darkness',                type: 'defensive',  duration:  8000, specs: ['havoc_dh','vengeance_dh'] },
+  'FIERY_BRAND':            { name: 'Fiery Brand',             type: 'defensive',  duration: 10000, specs: ['vengeance_dh'] },
+
+  // ── Monk ──
+  'STORM_EARTH_AND_FIRE':   { name: 'Storm, Earth, and Fire',  type: 'offensive',  duration: 15000, specs: ['windwalker_monk'] },
+  'SERENITY':               { name: 'Serenity',                type: 'offensive',  duration: 12000, specs: ['windwalker_monk'] },
+  'TOUCH_OF_DEATH':         { name: 'Touch of Death',          type: 'offensive',  duration:     0, specs: ['windwalker_monk'] },
+  'LIFE_COCOON':            { name: 'Life Cocoon',             type: 'defensive',  duration: 12000, specs: ['mistweaver_monk'] },
+  'REVIVAL':                { name: 'Revival',                 type: 'defensive',  duration:     0, specs: ['mistweaver_monk'] },
+  'FORTIFYING_BREW':        { name: 'Fortifying Brew',         type: 'defensive',  duration: 15000, specs: ['brewmaster_monk'] },
+
+  // ── Evoker ──
+  'DRAGONRAGE':             { name: 'Dragonrage',              type: 'offensive',  duration: 18000, specs: ['devastation_evoker'] },
+  'BREATH_OF_EONS':         { name: 'Breath of Eons',          type: 'offensive',  duration: 10000, specs: ['augmentation_evoker'] },
+  'EBON_MIGHT':             { name: 'Ebon Might',              type: 'offensive',  duration: 10000, specs: ['augmentation_evoker'] },
+  'REWIND':                 { name: 'Rewind',                  type: 'defensive',  duration:     0, specs: ['preservation_evoker'] },
+  'OBSIDIAN_SCALES':        { name: 'Obsidian Scales',         type: 'defensive',  duration: 12000, specs: ['devastation_evoker','augmentation_evoker'] },
+
+  // ── Universal ──
+  'BERSERKING':             { name: 'Berserking',              type: 'offensive',  duration: 12000, specs: [] }, // racial
+  'BLOOD_FURY':             { name: 'Blood Fury',              type: 'offensive',  duration: 15000, specs: [] }, // racial
 };
+
+// Build a fast lookup set of all log-name keys for the parser hot path
+const CD_SPELL_NAMES = new Set(Object.keys(COOLDOWN_REGISTRY));
+
+// ── PARSER ───────────────────────────────────────────────────
 
 function parseCombatLog(text) {
   const lines = text.split('\n');
@@ -1855,17 +1985,13 @@ function parseCombatLog(text) {
     if (!line.trim()) continue;
     const parts = line.split('  ');
     if (parts.length < 2) continue;
-
-    const timestampStr = parts[0];
-    const payload = parts.slice(1).join('  ');
-    const timestamp = parseTimestamp(timestampStr);
+    const timestamp = parseTimestamp(parts[0]);
     if (!timestamp) continue;
-
+    const payload = parts.slice(1).join('  ');
     const fields = payload.split(',');
     const eventType = fields[0];
 
-    // Detect round start/end via ARENA_MATCH events or UNIT_DIED patterns
-    if (eventType === 'ARENA_MATCH_START' || eventType === 'ZONE_CHANGE') {
+    if (eventType === 'ARENA_MATCH_START') {
       if (currentRound) rounds.push(finalizeRound(currentRound));
       roundIndex++;
       currentRound = createRound(roundIndex, timestamp, fields);
@@ -1876,7 +2002,7 @@ function parseCombatLog(text) {
         currentRound = null;
       }
     } else if (currentRound) {
-      processEvent(currentRound, timestamp, eventType, fields, payload);
+      processEvent(currentRound, timestamp, eventType, fields);
     }
   }
 
@@ -1885,7 +2011,6 @@ function parseCombatLog(text) {
 }
 
 function parseTimestamp(ts) {
-  // Format: M/D H:MM:SS.mmm
   const m = ts.match(/(\d+)\/(\d+)\s+(\d+):(\d+):(\d+)\.(\d+)/);
   if (!m) return null;
   return new Date(2024, m[1]-1, m[2], m[3], m[4], m[5], m[6]).getTime();
@@ -1893,410 +2018,428 @@ function parseTimestamp(ts) {
 
 function createRound(idx, timestamp, fields) {
   return {
-    index: idx,
-    startTime: timestamp,
-    endTime: null,
-    players: {},
-    events: [],
-    drTracker: {},
-    cooldownUsage: [],
-    deaths: [],
-    kills: [],
-    winner: null,
-    raw: fields
+    index: idx, startTime: timestamp, endTime: null,
+    players: {}, events: [], drTracker: {},
+    cooldownUsage: [], deaths: [], winner: null, raw: fields,
   };
 }
 
-function processEvent(round, ts, eventType, fields, payload) {
+function processEvent(round, ts, eventType, fields) {
   const relTime = ts - round.startTime;
-
-  // Track players
   const sourceGUID = fields[1] || '';
-  const sourceName = (fields[2] || '').replace(/"/g,'');
+  const sourceName = (fields[2] || '').replace(/"/g, '');
   const destGUID   = fields[4] || '';
-  const destName   = (fields[5] || '').replace(/"/g,'');
-  const spellName  = (fields[10] || '').replace(/"/g,'');
-  const spellNameUpper = spellName.toUpperCase().replace(/[\s']/g,'_');
+  const destName   = (fields[5] || '').replace(/"/g, '');
+  const spellName  = (fields[10] || '').replace(/"/g, '');
+  const spellKey   = spellName.toUpperCase().replace(/[\s']/g, '_');
 
-  if (sourceGUID.startsWith('Player-') && sourceName) {
+  if (sourceGUID.startsWith('Player-') && sourceName)
     if (!round.players[sourceGUID]) round.players[sourceGUID] = { name: sourceName, guid: sourceGUID, spec: 'Unknown', dmgOut: 0, ccApplied: 0, deathCount: 0 };
-  }
-  if (destGUID.startsWith('Player-') && destName) {
+  if (destGUID.startsWith('Player-') && destName)
     if (!round.players[destGUID]) round.players[destGUID] = { name: destName, guid: destGUID, spec: 'Unknown', dmgOut: 0, ccApplied: 0, deathCount: 0 };
-  }
 
-  // SPELL_AURA_APPLIED — CC tracking
+  // CC tracking via DR
   if (eventType === 'SPELL_AURA_APPLIED' || eventType === 'SPELL_AURA_APPLIED_DOSE') {
-    const drCat = getDRCategory(spellNameUpper);
+    const drCat = getDRCategory(spellKey);
     if (drCat && destGUID) {
       const key = `${destGUID}_${drCat}`;
       if (!round.drTracker[key]) round.drTracker[key] = [];
       const history = round.drTracker[key];
-      const lastEntry = history[history.length - 1];
-      let drMultiplier = 1.0;
-      if (lastEntry && (ts - lastEntry.ts) < DR_DECAY) {
-        drMultiplier = lastEntry.multiplier * 0.5;
-      }
-
-      const drEvent = { ts, relTime, spellName, sourceName, destName, category: drCat, multiplier: drMultiplier };
-      history.push(drEvent);
-
-      const flag = drMultiplier <= 0 ? '⚠ IMMUNE — wasted CC' : drMultiplier < 1 ? `DR: ${drMultiplier*100|0}% duration` : null;
+      const last = history[history.length - 1];
+      let mult = 1.0;
+      if (last && (ts - last.ts) < DR_DECAY) mult = Math.max(0, last.multiplier * 0.5);
+      history.push({ ts, relTime, spellName, sourceName, destName, category: drCat, multiplier: mult });
+      const flag = mult <= 0 ? '⚠ IMMUNE — wasted CC' : mult < 1 ? `DR: ${mult * 100 | 0}% duration` : null;
       round.events.push({
         type: 'CC', relTime, source: sourceName, dest: destName,
-        spell: spellName, drCategory: drCat, drMultiplier,
-        desc: `${sourceName} → ${spellName} on ${destName}`,
-        flag, positive: !flag && drMultiplier === 1.0 && null
+        spell: spellName, drCategory: drCat, drMultiplier: mult,
+        desc: `${sourceName} → ${spellName} on ${destName}`, flag,
       });
-
       if (round.players[sourceGUID]) round.players[sourceGUID].ccApplied++;
     }
   }
 
-  // SPELL_CAST_SUCCESS — cooldown tracking
-  if (eventType === 'SPELL_CAST_SUCCESS') {
-    const cdDef = MAJOR_COOLDOWNS[spellNameUpper];
-    if (cdDef) {
-      round.cooldownUsage.push({ ts, relTime, sourceName, spellName: cdDef.name, type: cdDef.type, duration: cdDef.duration });
-      round.events.push({
-        type: 'COOLDOWN', relTime, source: sourceName, dest: destName || '',
-        spell: cdDef.name, cdType: cdDef.type,
-        desc: `${sourceName} used ${cdDef.name}`,
-        flag: null
-      });
-    }
+  // Cooldown tracking — pulled from COOLDOWN_REGISTRY
+  if (eventType === 'SPELL_CAST_SUCCESS' && CD_SPELL_NAMES.has(spellKey)) {
+    const cd = COOLDOWN_REGISTRY[spellKey];
+    round.cooldownUsage.push({ ts, relTime, sourceName, spellName: cd.name, type: cd.type, duration: cd.duration });
+    round.events.push({
+      type: 'COOLDOWN', relTime, source: sourceName, dest: destName || '',
+      spell: cd.name, cdType: cd.type,
+      desc: `${sourceName} used ${cd.name}`, flag: null,
+    });
   }
 
-  // UNIT_DIED
+  // Deaths
   if (eventType === 'UNIT_DIED') {
-    const diedName = (fields[5] || '').replace(/"/g,'');
+    const diedName = (fields[5] || '').replace(/"/g, '');
     round.deaths.push({ ts, relTime, name: diedName });
     round.events.push({ type: 'DEATH', relTime, source: diedName, dest: '', spell: '', desc: `${diedName} died`, flag: null });
     if (round.players[destGUID]) round.players[destGUID].deathCount++;
   }
 
-  // SWING_DAMAGE / SPELL_DAMAGE for basic damage tracking
+  // Damage totals
   if ((eventType === 'SWING_DAMAGE' || eventType === 'SPELL_DAMAGE') && round.players[sourceGUID]) {
-    const amount = parseInt(fields[12]) || parseInt(fields[13]) || 0;
-    round.players[sourceGUID].dmgOut += amount;
+    round.players[sourceGUID].dmgOut += parseInt(fields[12]) || parseInt(fields[13]) || 0;
   }
 }
 
-function getDRCategory(spellNameUpper) {
+function getDRCategory(spellKey) {
   for (const [cat, spells] of Object.entries(DR_CATEGORIES)) {
-    if (spells.some(s => spellNameUpper.includes(s))) return cat;
+    if (spells.some(s => spellKey.includes(s))) return cat;
   }
   return null;
 }
 
+// ── ANALYZER ─────────────────────────────────────────────────
+// Generates mistakes by combining log-derived facts with KB strategy rules
+
 function finalizeRound(round) {
-  // Sort events
-  round.events.sort((a,b) => a.relTime - b.relTime);
+  round.events.sort((a, b) => a.relTime - b.relTime);
   round.duration = round.endTime ? (round.endTime - round.startTime) : 0;
-  round.mistakes = generateMistakeReport(round);
+  round.mistakes = generateMistakes(round);
   round.score = calculateScore(round);
   return round;
 }
 
-function generateMistakeReport(round) {
+function generateMistakes(round) {
   const mistakes = [];
+  const ccEvents  = round.events.filter(e => e.type === 'CC');
+  const offCDs    = round.cooldownUsage.filter(c => c.type === 'offensive');
+  const defCDs    = round.cooldownUsage.filter(c => c.type === 'defensive');
 
-  // DR violations
-  for (const [key, history] of Object.entries(round.drTracker)) {
+  // ── 1. DR VIOLATIONS (from log facts) ──
+  for (const history of Object.values(round.drTracker)) {
     for (const entry of history) {
       if (entry.multiplier <= 0) {
         mistakes.push({
-          severity: 'HIGH',
-          category: 'DR Violation',
-          title: `Immune-state CC wasted (${entry.category})`,
-          desc: `${entry.sourceName} cast ${entry.spellName} on ${entry.destName} while already immune from diminishing returns. This CC had 0% duration.`,
-          tip: 'Wait for DR to reset (18 seconds after the last CC in this category expired) before reapplying.',
-          at: fmtTime(entry.relTime)
+          severity: 'HIGH', category: 'DR Violation',
+          title: `IMMUNE — ${entry.spellName} had 0% duration`,
+          desc: `${entry.sourceName} applied ${entry.spellName} to ${entry.destName} at full immune DR. The CC did nothing.`,
+          tip: StrategyKB.getGeneralTips('CC Fundamentals').find(t => t.id === 'cc_chain_fundamentals')?.tip ||
+               'Wait 18 seconds after the last CC in this category before reapplying.',
+          at: fmtTime(entry.relTime),
         });
       } else if (entry.multiplier === 0.25) {
         mistakes.push({
-          severity: 'MEDIUM',
-          category: 'DR Violation',
-          title: `Quarter-duration CC applied (${entry.category})`,
-          desc: `${entry.sourceName} applied ${entry.spellName} at 25% duration. Consider letting DR decay before chaining.`,
-          tip: 'Quarter-duration CCs rarely achieve kill pressure. Coordinate with teammates to reset DR or switch targets.',
-          at: fmtTime(entry.relTime)
+          severity: 'MEDIUM', category: 'DR Violation',
+          title: `Quarter-duration CC — ${entry.spellName} (${entry.category})`,
+          desc: `${entry.sourceName} applied ${entry.spellName} to ${entry.destName} at 25% duration. Three applications of the same DR category have now been used.`,
+          tip: 'Switch to a different DR category or wait for the 18-second reset. 25% CCs rarely contribute meaningful pressure.',
+          at: fmtTime(entry.relTime),
         });
       }
     }
   }
 
-  // Detect cooldown dump without setup (major offensive CD without prior CC on target)
-  const offCDs = round.cooldownUsage.filter(c => c.type === 'offensive');
+  // ── 2. OFFENSIVE CD WITHOUT HEALER CC (from KB rule) ──
+  const generalCCRule = StrategyKB.getGeneralTips('CC Fundamentals').find(t => t.id === 'cc_healer_priority');
   for (const cd of offCDs) {
-    const nearbyCC = round.events.find(e =>
-      e.type === 'CC' && Math.abs(e.relTime - cd.relTime) < 3000
-    );
-    if (!nearbyCC && round.events.filter(e => e.type === 'CC').length > 0) {
+    const nearbyCC = ccEvents.find(e => Math.abs(e.relTime - cd.relTime) < 4000);
+    if (!nearbyCC && ccEvents.length > 0) {
       mistakes.push({
-        severity: 'MEDIUM',
-        category: 'Cooldown Usage',
-        title: `${cd.spellName} used without CC setup`,
-        desc: `${cd.sourceName} activated ${cd.spellName} but no crowd control was applied within 3 seconds. Offensive CDs deal optimal pressure when the target is locked down.`,
-        tip: 'Coordinate your burst window: CC first (or wait for a teammate CC), then activate offensive cooldowns to maximize pressure.',
-        at: fmtTime(cd.relTime)
+        severity: 'MEDIUM', category: 'Cooldown Usage',
+        title: `${cd.spellName} used without nearby CC`,
+        desc: `${cd.sourceName} activated ${cd.spellName} with no crowd control applied within 4 seconds. A free healer will trivially heal through this burst window.`,
+        tip: generalCCRule?.tip || 'Coordinate CC before activating offensive cooldowns.',
+        at: fmtTime(cd.relTime),
       });
     }
   }
 
-  // Long periods without CC when multiple CCs available
-  const ccEvents = round.events.filter(e => e.type === 'CC');
-  if (ccEvents.length > 0 && round.duration > 30000) {
-    let maxGap = 0;
-    let gapStart = 0;
-    let worstGap = null;
+  // ── 3. NO OFFENSIVE CDs IN A LONG ROUND ──
+  if (round.duration > 45000 && offCDs.length === 0) {
+    const defTip = StrategyKB.getGeneralTips('Defensives').find(t => t.id === 'def_held_too_long');
+    mistakes.push({
+      severity: 'HIGH', category: 'Cooldown Usage',
+      title: 'No offensive cooldowns used in a long round',
+      desc: `The round lasted ${fmtTime(round.duration)} and no offensive cooldowns were detected. Cooldowns held this long almost always means the kill window was never taken.`,
+      tip: 'In Solo Shuffle, unused offensive CDs are wasted CDs. Use them in your first genuine kill window — do not save indefinitely.',
+      at: '—',
+    });
+  }
+
+  // ── 4. DEFENSIVE HELD THROUGH DEATH ──
+  // If the focus player died and no defensive was logged for them, flag it
+  const deaths = round.events.filter(e => e.type === 'DEATH');
+  for (const death of deaths) {
+    const playerUsedDef = defCDs.some(d => d.sourceName === death.source);
+    if (!playerUsedDef && round.duration > 15000) {
+      const defTip = StrategyKB.getGeneralTips('Defensives').find(t => t.id === 'def_held_too_long');
+      mistakes.push({
+        severity: 'HIGH', category: 'Defensives',
+        title: `${death.source} died without using a tracked defensive`,
+        desc: `No major defensive cooldown was detected for ${death.source} before their death.`,
+        tip: defTip?.tip || 'Major defensives exist to prevent deaths. Press them before you die, not after.',
+        at: fmtTime(death.relTime),
+      });
+    }
+  }
+
+  // ── 5. CC GAP (prolonged window with no CC against a healer) ──
+  if (ccEvents.length >= 2 && round.duration > 30000) {
+    let maxGap = 0, worstGap = null;
     for (let i = 1; i < ccEvents.length; i++) {
       const gap = ccEvents[i].relTime - ccEvents[i-1].relTime;
       if (gap > maxGap) { maxGap = gap; worstGap = { start: ccEvents[i-1].relTime, end: ccEvents[i].relTime }; }
     }
-    if (maxGap > 20000) {
+    if (maxGap > 22000) {
       mistakes.push({
-        severity: 'LOW',
-        category: 'Pressure',
-        title: `${(maxGap/1000).toFixed(0)}s gap in crowd control`,
-        desc: `Between ${fmtTime(worstGap.start)} and ${fmtTime(worstGap.end)}, no CC was applied. Extended periods without crowd control allow healers to recover freely.`,
-        tip: 'Against a healer, aim for a continuous CC chain using different DR categories. Rotate stuns, incapacitates, and silences to maintain pressure.',
-        at: fmtTime(worstGap.start)
+        severity: 'LOW', category: 'Pressure',
+        title: `${(maxGap / 1000).toFixed(0)}s gap with no crowd control`,
+        desc: `Between ${fmtTime(worstGap.start)} and ${fmtTime(worstGap.end)}, no CC was applied. The enemy healer had free rein to recover.`,
+        tip: 'Aim for continuous CC rotation using different DR categories. Rotate stuns, incapacitates, and silences to keep the healer occupied.',
+        at: fmtTime(worstGap.start),
       });
     }
   }
 
-  // No cooldowns used in a long round
-  if (round.duration > 45000 && round.cooldownUsage.length === 0) {
-    mistakes.push({
-      severity: 'HIGH',
-      category: 'Cooldown Usage',
-      title: 'No major cooldowns used',
-      desc: `The round lasted over 45 seconds and no tracked major offensive/defensive cooldowns were detected. This likely indicates cooldowns were saved indefinitely.`,
-      tip: 'Major cooldowns are almost always worth using in Solo Shuffle rounds. If you are saving them, have a clear reason (e.g., enemy Divine Shield just ended).',
-      at: '0:00'
-    });
+  // ── 6. SPEC-SPECIFIC MISTAKES (from KB) ──
+  // Detect the focus player (highest CC count = likely the one we're analyzing)
+  const players = Object.values(round.players);
+  const focusPlayer = [...players].sort((a, b) => b.ccApplied - a.ccApplied)[0];
+  if (focusPlayer) {
+    const specMistakes = StrategyKB.getMistakes(focusPlayer.spec);
+    for (const km of specMistakes) {
+      // sub_dr_chain: Cheap Shot immediately followed by Kidney Shot (<6s gap)
+      if (km.id === 'sub_dr_chain') {
+        const cheapShots = ccEvents.filter(e => e.source === focusPlayer.name && e.spell.toLowerCase().includes('cheap shot'));
+        const kidneys    = ccEvents.filter(e => e.source === focusPlayer.name && e.spell.toLowerCase().includes('kidney'));
+        for (const cs of cheapShots) {
+          const tooQuick = kidneys.find(k => k.relTime > cs.relTime && k.relTime - cs.relTime < 7000);
+          if (tooQuick) {
+            mistakes.push({ severity: km.severity, category: 'DR Violation', title: km.title, desc: `Kidney Shot followed Cheap Shot by only ${((tooQuick.relTime - cs.relTime)/1000).toFixed(1)}s — stun DR was still active.`, tip: km.tip, at: fmtTime(tooQuick.relTime) });
+          }
+        }
+      }
+      // sub_late_cds: SoD used after 30s
+      if (km.id === 'sub_late_cds') {
+        const sodEvents = offCDs.filter(c => c.spellName === 'Symbols of Death' && c.sourceName === focusPlayer.name);
+        for (const sod of sodEvents) {
+          if (sod.relTime > 30000) {
+            mistakes.push({ severity: km.severity, category: 'Cooldown Usage', title: km.title, desc: `${focusPlayer.name} activated Symbols of Death at ${fmtTime(sod.relTime)} — past the ideal 0:20–0:30 window.`, tip: km.tip, at: fmtTime(sod.relTime) });
+          }
+        }
+      }
+      // war_reck_no_cc: Recklessness / Avatar used without CC
+      if (km.id === 'war_reck_no_cc') {
+        const reckEvents = offCDs.filter(c => (c.spellName === 'Recklessness' || c.spellName === 'Avatar') && c.sourceName === focusPlayer.name);
+        for (const r of reckEvents) {
+          const nearby = ccEvents.find(e => Math.abs(e.relTime - r.relTime) < 4000);
+          if (!nearby) {
+            mistakes.push({ severity: km.severity, category: 'Cooldown Usage', title: km.title, desc: `${focusPlayer.name} used ${r.spellName} at ${fmtTime(r.relTime)} without nearby CC on the healer.`, tip: km.tip, at: fmtTime(r.relTime) });
+          }
+        }
+      }
+    }
   }
 
-  mistakes.sort((a,b) => {
-    const order = { HIGH:0, MEDIUM:1, LOW:2 };
-    return order[a.severity] - order[b.severity];
+  // Deduplicate and sort
+  const seen = new Set();
+  const unique = mistakes.filter(m => {
+    const key = m.title + m.at;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
   });
-
-  return mistakes;
+  unique.sort((a, b) => ({ HIGH: 0, MEDIUM: 1, LOW: 2 }[a.severity] - { HIGH: 0, MEDIUM: 1, LOW: 2 }[b.severity]));
+  return unique;
 }
 
 function calculateScore(round) {
-  let score = 85;
+  let score = 88;
   for (const m of round.mistakes) {
-    if (m.severity === 'HIGH')   score -= 15;
-    if (m.severity === 'MEDIUM') score -= 8;
-    if (m.severity === 'LOW')    score -= 4;
+    if (m.severity === 'HIGH')   score -= 14;
+    if (m.severity === 'MEDIUM') score -= 7;
+    if (m.severity === 'LOW')    score -= 3;
   }
   return Math.max(0, Math.min(100, score));
 }
 
 function fmtTime(ms) {
   const s = Math.floor(ms / 1000);
-  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 // ============================================================
 // DEMO DATA GENERATOR
+// Events are raw — finalizeRound() runs them through the
+// analyzer which calls the KB, so no hardcoded mistakes here
 // ============================================================
 
 function generateDemoRounds() {
-  const specs = ['Sub Rogue', 'Arms Warrior', 'Fire Mage', 'Holy Paladin', 'Balance Druid', 'Frost DK'];
-
   function makeRound(idx, config) {
     const duration = config.duration * 1000;
     const startTime = Date.now() - 300000 + idx * 90000;
-    const events = [];
     const players = {};
-    const drTracker = {};
-
     config.players.forEach((p, i) => {
-      const guid = `Player-${1000+i}`;
-      players[guid] = { name: p.name, guid, spec: p.spec, dmgOut: p.dmg, ccApplied: p.cc, deathCount: p.dead ? 1 : 0 };
+      players[`Player-${1000 + i}`] = { name: p.name, guid: `Player-${1000+i}`, spec: p.spec, dmgOut: p.dmg, ccApplied: p.cc, deathCount: p.dead ? 1 : 0 };
     });
-
-    // Generate realistic event sequence
-    config.events.forEach(e => {
-      events.push({ ...e, relTime: e.t * 1000 });
-    });
-
+    const events = config.events.map(e => ({ ...e, relTime: e.t * 1000 }));
+    // Build drTracker from events so analyzer can use it
+    const drTracker = {};
+    let fakeTs = startTime;
+    for (const e of events) {
+      fakeTs = startTime + e.relTime;
+      if (e.type === 'CC' && e.drCategory) {
+        const key = `demo_${e.dest}_${e.drCategory}`;
+        if (!drTracker[key]) drTracker[key] = [];
+        const hist = drTracker[key];
+        const last = hist[hist.length - 1];
+        let mult = 1.0;
+        if (last && (fakeTs - last.ts) < DR_DECAY) mult = Math.max(0, last.multiplier * 0.5);
+        hist.push({ ts: fakeTs, relTime: e.relTime, spellName: e.spell, sourceName: e.source, destName: e.dest, category: e.drCategory, multiplier: mult });
+        // Update event flag from computed multiplier
+        e.drMultiplier = mult;
+        e.flag = mult <= 0 ? '⚠ IMMUNE — wasted CC' : mult < 1 ? `DR: ${mult * 100 | 0}% duration` : null;
+      }
+    }
+    const cooldownUsage = events.filter(e => e.type === 'COOLDOWN').map(e => ({
+      ts: startTime + e.relTime, relTime: e.relTime,
+      sourceName: e.source, spellName: e.spell, type: e.cdType || 'offensive', duration: 12000,
+    }));
     const round = {
       index: idx, startTime, endTime: startTime + duration, duration,
-      players, events, drTracker, cooldownUsage: [], deaths: [], kills: [],
-      winner: config.winner, mistakes: config.mistakes,
-      score: config.score, demoLabel: config.label
+      players, events, drTracker, cooldownUsage, deaths: [], winner: null,
+      demoLabel: config.label,
     };
+    // Run through the real analyzer — no hardcoded mistakes
+    round.mistakes = generateMistakes(round);
+    round.score = calculateScore(round);
     return round;
   }
 
   return [
     makeRound(1, {
-      label: 'Rd 1 – Sub Rogue',
-      duration: 52, winner: null, score: 61,
+      label: 'Rd 1 – Sub Rogue', duration: 52,
       players: [
-        { name: 'Krevash', spec: 'Sub Rogue', dmg: 487320, cc: 4, dead: false },
-        { name: 'Dromath', spec: 'Arms Warrior', dmg: 412100, cc: 1, dead: false },
-        { name: 'Liruva', spec: 'Holy Paladin', dmg: 44200, cc: 3, dead: false },
-        { name: 'Naeveth', spec: 'Fire Mage', dmg: 554900, cc: 5, dead: true },
-        { name: 'Pyrekin', spec: 'Balance Druid', dmg: 380000, cc: 2, dead: false },
-        { name: 'Valdros', spec: 'Holy Priest', dmg: 31000, cc: 1, dead: false },
+        { name: 'Krevash',  spec: 'Subtlety Rogue',  dmg: 487320, cc: 5, dead: false },
+        { name: 'Dromath',  spec: 'Arms Warrior',     dmg: 412100, cc: 1, dead: false },
+        { name: 'Liruva',   spec: 'Holy Paladin',     dmg: 44200,  cc: 3, dead: false },
+        { name: 'Naeveth',  spec: 'Fire Mage',        dmg: 554900, cc: 5, dead: true  },
+        { name: 'Pyrekin',  spec: 'Balance Druid',    dmg: 380000, cc: 2, dead: false },
+        { name: 'Valdros',  spec: 'Holy Priest',      dmg: 31000,  cc: 1, dead: false },
       ],
       events: [
-        { type:'CC', source:'Krevash', dest:'Liruva', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Liruva', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Symbols of Death', cdType:'offensive', desc:'Krevash used Symbols of Death', flag:null, t:4 },
-        { type:'CC', source:'Naeveth', dest:'Liruva', spell:'Dragon\'s Breath', drCategory:'disorient', drMultiplier:1.0, desc:'Naeveth → Dragon\'s Breath on Liruva', flag:null, t:7 },
-        { type:'CC', source:'Krevash', dest:'Liruva', spell:'Kidney Shot', drCategory:'stun', drMultiplier:0.5, desc:'Krevash → Kidney Shot on Liruva', flag:'DR: 50% duration', t:9 },
-        { type:'CC', source:'Pyrekin', dest:'Naeveth', spell:'Entangling Roots', drCategory:'root', drMultiplier:1.0, desc:'Pyrekin → Entangling Roots on Naeveth', flag:null, t:14 },
-        { type:'CC', source:'Liruva', dest:'Krevash', spell:'Blind', drCategory:'incapacitate', drMultiplier:1.0, desc:'Liruva → Blind on Krevash', flag:null, t:19 },
-        { type:'COOLDOWN', source:'Dromath', dest:'', spell:'Recklessness', cdType:'offensive', desc:'Dromath used Recklessness', flag:null, t:22 },
-        { type:'CC', source:'Krevash', dest:'Liruva', spell:'Cheap Shot', drCategory:'stun', drMultiplier:0.25, desc:'Krevash → Cheap Shot on Liruva (DR ×0.25)', flag:'DR: 25% duration', t:28 },
-        { type:'CC', source:'Naeveth', dest:'Valdros', spell:'Polymorph', drCategory:'incapacitate', drMultiplier:1.0, desc:'Naeveth → Polymorph on Valdros', flag:null, t:35 },
-        { type:'CC', source:'Krevash', dest:'Liruva', spell:'Kidney Shot', drCategory:'stun', drMultiplier:0.0, desc:'Krevash → Kidney Shot on Liruva (IMMUNE)', flag:'⚠ IMMUNE — wasted CC', t:40 },
-        { type:'DEATH', source:'Naeveth', dest:'', spell:'', desc:'Naeveth died', flag:null, t:48 },
+        { type:'CC',       source:'Krevash', dest:'Liruva',  spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Liruva',       flag:null, t:3  },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Symbols of Death', cdType:'offensive',       desc:'Krevash used Symbols of Death',         flag:null, t:35 },
+        { type:'CC',       source:'Naeveth', dest:'Liruva',  spell:"Dragon's Breath", drCategory:'disorient',   drMultiplier:1.0, desc:"Naeveth → Dragon's Breath on Liruva",  flag:null, t:7  },
+        { type:'CC',       source:'Krevash', dest:'Liruva',  spell:'Kidney Shot',     drCategory:'stun',        drMultiplier:0.5, desc:'Krevash → Kidney Shot on Liruva',      flag:null, t:9  },
+        { type:'CC',       source:'Pyrekin', dest:'Naeveth', spell:'Entangling Roots',drCategory:'root',        drMultiplier:1.0, desc:'Pyrekin → Entangling Roots on Naeveth', flag:null, t:14 },
+        { type:'CC',       source:'Krevash', dest:'Liruva',  spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:0.25,desc:'Krevash → Cheap Shot on Liruva',       flag:null, t:28 },
+        { type:'CC',       source:'Naeveth', dest:'Valdros', spell:'Polymorph',       drCategory:'incapacitate',drMultiplier:1.0, desc:'Naeveth → Polymorph on Valdros',       flag:null, t:35 },
+        { type:'CC',       source:'Krevash', dest:'Liruva',  spell:'Kidney Shot',     drCategory:'stun',        drMultiplier:0.0, desc:'Krevash → Kidney Shot on Liruva',      flag:null, t:40 },
+        { type:'DEATH',    source:'Naeveth', dest:'',        spell:'',                desc:'Naeveth died',                                                                      flag:null, t:48 },
       ],
-      mistakes: [
-        { severity:'HIGH', category:'DR Violation', title:'Immune-state CC wasted (stun)', desc:'Krevash cast Kidney Shot on Liruva at 0:40 while Liruva was fully immune to stuns from DR. The CC had 0% duration.', tip:'Stun DR resets in 18 seconds. At this point Cheap Shot had been used at 0:03, Kidney Shot at 0:09, and Cheap Shot again at 0:28 — the category was fully diminished. Switch to a different CC type or wait for reset.', at:'0:40' },
-        { severity:'MEDIUM', category:'DR Violation', title:'Kidney Shot used at 50% DR', desc:'The Kidney Shot at 0:09 hit Liruva when stun DR was already at half duration. This reduced pressure significantly during the kill window.', tip:'After a Cheap Shot opener, let a healer or teammate apply CC from a different DR category before reapplying stuns, or wait for the 18s reset.', at:'0:09' },
-        { severity:'MEDIUM', category:'DR Violation', title:'Cheap Shot applied at 25% DR', desc:'Cheap Shot at 0:28 hit at only 25% duration. This was predictable given the prior stun chain.', tip:'At this point switching to a Sap on the healer or off-target would have been more valuable than a 25% duration stun.', at:'0:28' },
-      ]
     }),
     makeRound(2, {
-      label: 'Rd 2 – Sub Rogue',
-      duration: 38, winner: null, score: 79,
+      label: 'Rd 2 – Sub Rogue', duration: 38,
       players: [
-        { name: 'Krevash', spec: 'Sub Rogue', dmg: 611200, cc: 6, dead: false },
-        { name: 'Dromath', spec: 'Arms Warrior', dmg: 488000, cc: 2, dead: false },
-        { name: 'Faerwyn', spec: 'Disc Priest', dmg: 55000, cc: 2, dead: true },
-        { name: 'Tessik', spec: 'Frost Mage', dmg: 470000, cc: 4, dead: false },
-        { name: 'Gorvath', spec: 'Ret Paladin', dmg: 521000, cc: 1, dead: false },
-        { name: 'Ulnara', spec: 'Resto Druid', dmg: 28000, cc: 3, dead: false },
+        { name: 'Krevash',  spec: 'Subtlety Rogue',  dmg: 611200, cc: 6, dead: false },
+        { name: 'Dromath',  spec: 'Arms Warrior',     dmg: 488000, cc: 2, dead: false },
+        { name: 'Faerwyn',  spec: 'Disc Priest',      dmg: 55000,  cc: 2, dead: true  },
+        { name: 'Tessik',   spec: 'Frost Mage',       dmg: 470000, cc: 4, dead: false },
+        { name: 'Gorvath',  spec: 'Retribution Paladin', dmg: 521000, cc: 1, dead: false },
+        { name: 'Ulnara',   spec: 'Restoration Druid',dmg: 28000,  cc: 3, dead: false },
       ],
       events: [
-        { type:'CC', source:'Krevash', dest:'Ulnara', spell:'Sap', drCategory:'incapacitate', drMultiplier:1.0, desc:'Krevash → Sap on Ulnara', flag:null, t:1 },
-        { type:'CC', source:'Krevash', dest:'Faerwyn', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Faerwyn', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Symbols of Death', cdType:'offensive', desc:'Krevash used Symbols of Death', flag:null, t:3 },
-        { type:'CC', source:'Gorvath', dest:'Faerwyn', spell:'Hammer of Justice', drCategory:'stun', drMultiplier:0.5, desc:'Gorvath → Hammer of Justice on Faerwyn', flag:'DR: 50% duration', t:7 },
-        { type:'CC', source:'Tessik', dest:'Ulnara', spell:'Polymorph', drCategory:'incapacitate', drMultiplier:1.0, desc:'Tessik → Polymorph on Ulnara', flag:null, t:11 },
-        { type:'CC', source:'Krevash', dest:'Faerwyn', spell:'Kidney Shot', drCategory:'stun', drMultiplier:0.25, desc:'Krevash → Kidney Shot on Faerwyn', flag:'DR: 25% duration', t:14 },
-        { type:'CC', source:'Krevash', dest:'Ulnara', spell:'Blind', drCategory:'incapacitate', drMultiplier:0.5, desc:'Krevash → Blind on Ulnara', flag:'DR: 50% duration', t:22 },
-        { type:'DEATH', source:'Faerwyn', dest:'', spell:'', desc:'Faerwyn died', flag:null, t:35 },
+        { type:'CC',       source:'Krevash', dest:'Ulnara',  spell:'Sap',             drCategory:'incapacitate',drMultiplier:1.0, desc:'Krevash → Sap on Ulnara',  flag:null, t:1  },
+        { type:'CC',       source:'Krevash', dest:'Faerwyn', spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Faerwyn', flag:null, t:3  },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Symbols of Death', cdType:'offensive',       desc:'Krevash used Symbols of Death', flag:null, t:3  },
+        { type:'CC',       source:'Gorvath', dest:'Faerwyn', spell:'Hammer of Justice',drCategory:'stun',       drMultiplier:0.5, desc:'Gorvath → Hammer of Justice on Faerwyn', flag:null, t:7  },
+        { type:'CC',       source:'Tessik',  dest:'Ulnara',  spell:'Polymorph',       drCategory:'incapacitate',drMultiplier:0.5, desc:'Tessik → Polymorph on Ulnara', flag:null, t:6  },
+        { type:'CC',       source:'Krevash', dest:'Faerwyn', spell:'Kidney Shot',     drCategory:'stun',        drMultiplier:0.25,desc:'Krevash → Kidney Shot on Faerwyn', flag:null, t:14 },
+        { type:'CC',       source:'Krevash', dest:'Ulnara',  spell:'Blind',           drCategory:'incapacitate',drMultiplier:0.5, desc:'Krevash → Blind on Ulnara', flag:null, t:22 },
+        { type:'DEATH',    source:'Faerwyn', dest:'',        spell:'',                desc:'Faerwyn died',       flag:null, t:35 },
       ],
-      mistakes: [
-        { severity:'MEDIUM', category:'DR Violation', title:'Hammer of Justice into stun DR', desc:'Gorvath cast Hammer of Justice at 0:07, after Krevash\'s Cheap Shot. This burned Hammer of Justice for only 50% duration.', tip:'Hammer of Justice is best saved for a fresh DR reset or as an interrupt on healer casts. Avoid following a rogue\'s stun opener with another stun.', at:'0:07' },
-        { severity:'LOW', category:'Pressure', title:'Ulnara CC chain broke early', desc:'The Sap into Polymorph chain was effective but the Blind at 0:22 hit at 50% DR, slightly reducing effectiveness.', tip:'Consider using a silence or cyclone variant to extend healer lockout without burning incapacitate DR.', at:'0:22' },
-      ]
     }),
     makeRound(3, {
-      label: 'Rd 3 – Sub Rogue',
-      duration: 29, winner: null, score: 91,
+      label: 'Rd 3 – Sub Rogue', duration: 29,
       players: [
-        { name: 'Krevash', spec: 'Sub Rogue', dmg: 739400, cc: 7, dead: false },
-        { name: 'Dromath', spec: 'Arms Warrior', dmg: 520000, cc: 3, dead: false },
-        { name: 'Zorvinax', spec: 'Holy Paladin', dmg: 39000, cc: 2, dead: true },
-        { name: 'Yelmira', spec: 'Arcane Mage', dmg: 498000, cc: 3, dead: false },
-        { name: 'Braxith', spec: 'Unholy DK', dmg: 433000, cc: 2, dead: false },
-        { name: 'Celyvon', spec: 'Disc Priest', dmg: 48000, cc: 4, dead: false },
+        { name: 'Krevash',  spec: 'Subtlety Rogue',  dmg: 739400, cc: 7, dead: false },
+        { name: 'Dromath',  spec: 'Arms Warrior',     dmg: 520000, cc: 3, dead: false },
+        { name: 'Zorvinax', spec: 'Holy Paladin',     dmg: 39000,  cc: 2, dead: true  },
+        { name: 'Yelmira',  spec: 'Arcane Mage',      dmg: 498000, cc: 3, dead: false },
+        { name: 'Braxith',  spec: 'Unholy Death Knight', dmg: 433000, cc: 2, dead: false },
+        { name: 'Celyvon',  spec: 'Disc Priest',      dmg: 48000,  cc: 4, dead: false },
       ],
       events: [
-        { type:'CC', source:'Krevash', dest:'Zorvinax', spell:'Sap', drCategory:'incapacitate', drMultiplier:1.0, desc:'Krevash → Sap on Zorvinax', flag:null, t:1 },
-        { type:'CC', source:'Krevash', dest:'Celyvon', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Celyvon', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Shadow Dance', cdType:'offensive', desc:'Krevash used Shadow Dance', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Symbols of Death', cdType:'offensive', desc:'Krevash used Symbols of Death', flag:null, t:4 },
-        { type:'CC', source:'Yelmira', dest:'Celyvon', spell:'Dragon\'s Breath', drCategory:'disorient', drMultiplier:1.0, desc:'Yelmira → Dragon\'s Breath on Celyvon', flag:null, t:7 },
-        { type:'CC', source:'Krevash', dest:'Zorvinax', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Zorvinax', flag:null, t:10 },
-        { type:'CC', source:'Dromath', dest:'Celyvon', spell:'Intimidating Shout', drCategory:'disorient', drMultiplier:0.5, desc:'Dromath → Intimidating Shout on Celyvon', flag:'DR: 50% duration', t:13 },
-        { type:'CC', source:'Yelmira', dest:'Celyvon', spell:'Polymorph', drCategory:'incapacitate', drMultiplier:1.0, desc:'Yelmira → Polymorph on Celyvon', flag:null, t:18 },
-        { type:'CC', source:'Krevash', dest:'Zorvinax', spell:'Kidney Shot', drCategory:'stun', drMultiplier:0.5, desc:'Krevash → Kidney Shot on Zorvinax', flag:'DR: 50% duration', t:20 },
-        { type:'DEATH', source:'Zorvinax', dest:'', spell:'', desc:'Zorvinax died', flag:null, t:27 },
+        { type:'CC',       source:'Krevash', dest:'Zorvinax',spell:'Sap',             drCategory:'incapacitate',drMultiplier:1.0, desc:'Krevash → Sap on Zorvinax',   flag:null, t:1  },
+        { type:'CC',       source:'Krevash', dest:'Celyvon', spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Celyvon', flag:null, t:3 },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Shadow Dance',    cdType:'offensive',        desc:'Krevash used Shadow Dance', flag:null, t:3  },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Symbols of Death',cdType:'offensive',        desc:'Krevash used Symbols of Death', flag:null, t:4 },
+        { type:'CC',       source:'Yelmira', dest:'Celyvon', spell:"Dragon's Breath", drCategory:'disorient',   drMultiplier:1.0, desc:"Yelmira → Dragon's Breath on Celyvon", flag:null, t:7 },
+        { type:'CC',       source:'Krevash', dest:'Zorvinax',spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Zorvinax', flag:null, t:10 },
+        { type:'CC',       source:'Dromath', dest:'Celyvon', spell:'Intimidating Shout',drCategory:'disorient', drMultiplier:0.5, desc:'Dromath → Intimidating Shout on Celyvon', flag:null, t:13 },
+        { type:'CC',       source:'Yelmira', dest:'Celyvon', spell:'Polymorph',       drCategory:'incapacitate',drMultiplier:1.0, desc:'Yelmira → Polymorph on Celyvon', flag:null, t:18 },
+        { type:'CC',       source:'Krevash', dest:'Zorvinax',spell:'Kidney Shot',     drCategory:'stun',        drMultiplier:0.5, desc:'Krevash → Kidney Shot on Zorvinax', flag:null, t:20 },
+        { type:'DEATH',    source:'Zorvinax',dest:'',        spell:'',                desc:'Zorvinax died',      flag:null, t:27 },
       ],
-      mistakes: [
-        { severity:'LOW', category:'DR', title:'Intimidating Shout clipped disorient DR', desc:'Dromath\'s Intimidating Shout at 0:13 landed into the same disorient category as Dragon\'s Breath at 0:07, halving its duration.', tip:'Minor — the Polymorph chain at 0:18 from a different category reset the situation cleanly. Communication with teammates about DR categories would prevent this.', at:'0:13' },
-      ]
     }),
     makeRound(4, {
-      label: 'Rd 4 – Sub Rogue',
-      duration: 67, winner: null, score: 44,
+      label: 'Rd 4 – Sub Rogue', duration: 67,
       players: [
-        { name: 'Krevash', spec: 'Sub Rogue', dmg: 390200, cc: 2, dead: true },
-        { name: 'Vhorrusk', spec: 'Frost DK', dmg: 355000, cc: 3, dead: false },
-        { name: 'Palindra', spec: 'Holy Priest', dmg: 42000, cc: 1, dead: false },
-        { name: 'Tserkav', spec: 'Havoc DH', dmg: 612000, cc: 2, dead: false },
-        { name: 'Olmavex', spec: 'Arms Warrior', dmg: 578000, cc: 2, dead: false },
-        { name: 'Raevith', spec: 'Resto Shaman', dmg: 33000, cc: 3, dead: false },
+        { name: 'Krevash',  spec: 'Subtlety Rogue',  dmg: 390200, cc: 2, dead: true  },
+        { name: 'Vhorrusk', spec: 'Frost Death Knight', dmg: 355000, cc: 3, dead: false },
+        { name: 'Palindra', spec: 'Holy Priest',      dmg: 42000,  cc: 1, dead: false },
+        { name: 'Tserkav',  spec: 'Havoc Demon Hunter', dmg: 612000, cc: 2, dead: false },
+        { name: 'Olmavex',  spec: 'Arms Warrior',     dmg: 578000, cc: 2, dead: false },
+        { name: 'Raevith',  spec: 'Restoration Shaman', dmg: 33000, cc: 3, dead: false },
       ],
       events: [
-        { type:'CC', source:'Krevash', dest:'Raevith', spell:'Sap', drCategory:'incapacitate', drMultiplier:1.0, desc:'Krevash → Sap on Raevith', flag:null, t:1 },
-        { type:'CC', source:'Vhorrusk', dest:'Tserkav', spell:'Chains of Ice', drCategory:'root', drMultiplier:1.0, desc:'Vhorrusk → Chains of Ice on Tserkav', flag:null, t:5 },
-        { type:'CC', source:'Tserkav', dest:'Krevash', spell:'Imprison', drCategory:'incapacitate', drMultiplier:1.0, desc:'Tserkav → Imprison on Krevash', flag:null, t:9 },
-        { type:'CC', source:'Olmavex', dest:'Vhorrusk', spell:'Intimidating Shout', drCategory:'disorient', drMultiplier:1.0, desc:'Olmavex → Intimidating Shout on Vhorrusk', flag:null, t:15 },
-        { type:'CC', source:'Krevash', dest:'Raevith', spell:'Blind', drCategory:'incapacitate', drMultiplier:0.5, desc:'Krevash → Blind on Raevith (DR 50%)', flag:'DR: 50% duration', t:28 },
-        { type:'CC', source:'Krevash', dest:'Raevith', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Raevith', flag:null, t:42 },
-        { type:'DEATH', source:'Krevash', dest:'', spell:'', desc:'Krevash died', flag:null, t:61 },
+        { type:'CC',    source:'Krevash', dest:'Raevith',  spell:'Sap',              drCategory:'incapacitate',drMultiplier:1.0, desc:'Krevash → Sap on Raevith',  flag:null, t:1  },
+        { type:'CC',    source:'Vhorrusk',dest:'Tserkav',  spell:'Chains of Ice',    drCategory:'root',        drMultiplier:1.0, desc:'Vhorrusk → Chains of Ice on Tserkav', flag:null, t:5 },
+        { type:'CC',    source:'Tserkav', dest:'Krevash',  spell:'Imprison',         drCategory:'incapacitate',drMultiplier:1.0, desc:'Tserkav → Imprison on Krevash', flag:null, t:9 },
+        { type:'CC',    source:'Olmavex', dest:'Vhorrusk', spell:'Intimidating Shout',drCategory:'disorient',  drMultiplier:1.0, desc:'Olmavex → Intimidating Shout on Vhorrusk', flag:null, t:15 },
+        { type:'CC',    source:'Krevash', dest:'Raevith',  spell:'Blind',            drCategory:'incapacitate',drMultiplier:0.5, desc:'Krevash → Blind on Raevith', flag:null, t:28 },
+        { type:'CC',    source:'Krevash', dest:'Raevith',  spell:'Cheap Shot',       drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Raevith', flag:null, t:42 },
+        { type:'DEATH', source:'Krevash', dest:'',         spell:'',                 desc:'Krevash died',       flag:null, t:61 },
       ],
-      mistakes: [
-        { severity:'HIGH', category:'Cooldown Usage', title:'No major cooldowns used in 67-second round', desc:'Krevash never activated Symbols of Death or Shadow Dance despite the round lasting 67 seconds and eventually dying. Both cooldowns would have significantly increased burst damage during the kill windows at 0:05–0:20 and 0:42–0:61.', tip:'In Solo Shuffle, holding cooldowns too long is a common mistake. If you\'ve been alive for more than 30 seconds and haven\'t used your cooldowns, you are almost certainly losing value.', at:'—' },
-        { severity:'HIGH', category:'Targeting', title:'Healer targeted while Tserkav free', desc:'Krevash attempted to CC the healer Raevith but Tserkav (Havoc DH) was left free and later secured the kill. Against a Havoc DH + Arms Warrior, keeping the healer trained is typically wrong — burst the DPS in their defensive CDs window.', tip:'Identify the enemy win condition. Havoc DH and Arms Warrior can both one-shot targets. Pressure them defensively (stun into enemy offensive CDs) rather than training the healer.', at:'0:01' },
-        { severity:'MEDIUM', category:'DR Violation', title:'Blind into Sap DR at 0:28', desc:'The Blind at 0:28 hit Raevith at 50% DR from the earlier Sap at 0:01. With a 27-second gap this was borderline — the DR was close to resetting but had not fully decayed.', tip:'Sap DR decays in 18 seconds. By 0:28 it was fully reset — this was actually fine. (Note: this mistake was auto-detected conservatively; manually verify timing.)', at:'0:28' },
-      ]
     }),
     makeRound(5, {
-      label: 'Rd 5 – Sub Rogue',
-      duration: 44, winner: null, score: 72,
+      label: 'Rd 5 – Sub Rogue', duration: 44,
       players: [
-        { name: 'Krevash', spec: 'Sub Rogue', dmg: 581000, cc: 5, dead: false },
-        { name: 'Dromath', spec: 'Arms Warrior', dmg: 503000, cc: 2, dead: false },
-        { name: 'Virreth', spec: 'Resto Druid', dmg: 44000, cc: 4, dead: false },
-        { name: 'Thexaris', spec: 'Ret Paladin', dmg: 549000, cc: 1, dead: true },
-        { name: 'Corvyn', spec: 'Frost Mage', dmg: 461000, cc: 5, dead: false },
-        { name: 'Arellys', spec: 'Holy Paladin', dmg: 37000, cc: 2, dead: false },
+        { name: 'Krevash',  spec: 'Subtlety Rogue',  dmg: 581000, cc: 5, dead: false },
+        { name: 'Dromath',  spec: 'Arms Warrior',     dmg: 503000, cc: 2, dead: false },
+        { name: 'Virreth',  spec: 'Restoration Druid',dmg: 44000,  cc: 4, dead: false },
+        { name: 'Thexaris', spec: 'Retribution Paladin', dmg: 549000, cc: 1, dead: true },
+        { name: 'Corvyn',   spec: 'Frost Mage',       dmg: 461000, cc: 5, dead: false },
+        { name: 'Arellys',  spec: 'Holy Paladin',     dmg: 37000,  cc: 2, dead: false },
       ],
       events: [
-        { type:'CC', source:'Krevash', dest:'Arellys', spell:'Sap', drCategory:'incapacitate', drMultiplier:1.0, desc:'Krevash → Sap on Arellys', flag:null, t:1 },
-        { type:'CC', source:'Krevash', dest:'Virreth', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Virreth', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Symbols of Death', cdType:'offensive', desc:'Krevash used Symbols of Death', flag:null, t:4 },
-        { type:'CC', source:'Corvyn', dest:'Virreth', spell:'Frost Nova', drCategory:'root', drMultiplier:1.0, desc:'Corvyn → Frost Nova on Virreth', flag:null, t:8 },
-        { type:'CC', source:'Dromath', dest:'Virreth', spell:'Intimidating Shout', drCategory:'disorient', drMultiplier:1.0, desc:'Dromath → Intimidating Shout on Virreth', flag:null, t:12 },
-        { type:'CC', source:'Krevash', dest:'Arellys', spell:'Blind', drCategory:'incapacitate', drMultiplier:1.0, desc:'Krevash → Blind on Arellys', flag:null, t:16 },
-        { type:'CC', source:'Corvyn', dest:'Arellys', spell:'Polymorph', drCategory:'incapacitate', drMultiplier:0.5, desc:'Corvyn → Polymorph on Arellys (DR 50%)', flag:'DR: 50% duration', t:20 },
-        { type:'CC', source:'Krevash', dest:'Virreth', spell:'Kidney Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Kidney Shot on Virreth', flag:null, t:29 },
-        { type:'COOLDOWN', source:'Dromath', dest:'', spell:'Recklessness', cdType:'offensive', desc:'Dromath used Recklessness', flag:null, t:31 },
-        { type:'DEATH', source:'Thexaris', dest:'', spell:'', desc:'Thexaris died', flag:null, t:41 },
+        { type:'CC',       source:'Krevash', dest:'Arellys', spell:'Sap',             drCategory:'incapacitate',drMultiplier:1.0, desc:'Krevash → Sap on Arellys', flag:null, t:1  },
+        { type:'CC',       source:'Krevash', dest:'Virreth', spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Virreth', flag:null, t:3 },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Symbols of Death',cdType:'offensive',        desc:'Krevash used Symbols of Death', flag:null, t:4  },
+        { type:'CC',       source:'Corvyn',  dest:'Virreth', spell:'Frost Nova',      drCategory:'root',        drMultiplier:1.0, desc:'Corvyn → Frost Nova on Virreth', flag:null, t:8  },
+        { type:'CC',       source:'Dromath', dest:'Virreth', spell:'Intimidating Shout',drCategory:'disorient', drMultiplier:1.0, desc:'Dromath → Intimidating Shout on Virreth', flag:null, t:12 },
+        { type:'CC',       source:'Krevash', dest:'Arellys', spell:'Blind',           drCategory:'incapacitate',drMultiplier:1.0, desc:'Krevash → Blind on Arellys', flag:null, t:16 },
+        { type:'CC',       source:'Corvyn',  dest:'Arellys', spell:'Polymorph',       drCategory:'incapacitate',drMultiplier:0.5, desc:'Corvyn → Polymorph on Arellys', flag:null, t:20 },
+        { type:'CC',       source:'Krevash', dest:'Virreth', spell:'Kidney Shot',     drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Kidney Shot on Virreth', flag:null, t:29 },
+        { type:'COOLDOWN', source:'Dromath', dest:'',        spell:'Recklessness',    cdType:'offensive',        desc:'Dromath used Recklessness', flag:null, t:31 },
+        { type:'COOLDOWN', source:'Dromath', dest:'',        spell:'Avatar',          cdType:'offensive',        desc:'Dromath used Avatar', flag:null, t:31 },
+        { type:'DEATH',    source:'Thexaris',dest:'',        spell:'',                desc:'Thexaris died',      flag:null, t:41 },
       ],
-      mistakes: [
-        { severity:'MEDIUM', category:'DR Violation', title:'Corvyn Polymorph hit incapacitate DR', desc:'After Krevash\'s Blind on Arellys at 0:16, Corvyn\'s Polymorph at 0:20 hit at 50% DR. Coordination with teammates on healer CC categories would avoid wasting Polymorph.', tip:'Assign one player as the "healer CC" and communicate which DR category is being used. Polymorph should ideally open a fresh DR window, not follow a Blind.', at:'0:20' },
-        { severity:'LOW', category:'Cooldown Usage', title:'Recklessness used late in round', desc:'Dromath activated Recklessness at 0:31 in a 44-second round. This is workable, but earlier activation alongside the Symbols of Death at 0:04 would have aligned both offensive windows.', tip:'Stacking offensive cooldowns with your partner\'s creates stronger burst pressure than using them sequentially.', at:'0:31' },
-      ]
     }),
     makeRound(6, {
-      label: 'Rd 6 – Sub Rogue',
-      duration: 33, winner: null, score: 88,
+      label: 'Rd 6 – Sub Rogue', duration: 33,
       players: [
-        { name: 'Krevash', spec: 'Sub Rogue', dmg: 694000, cc: 6, dead: false },
-        { name: 'Valkryn', spec: 'Havoc DH', dmg: 588000, cc: 2, dead: false },
-        { name: 'Esharen', spec: 'Holy Priest', dmg: 41000, cc: 3, dead: true },
-        { name: 'Perdaxis', spec: 'Arcane Mage', dmg: 510000, cc: 4, dead: false },
-        { name: 'Torven', spec: 'Arms Warrior', dmg: 481000, cc: 1, dead: false },
-        { name: 'Crystyn', spec: 'Resto Shaman', dmg: 35000, cc: 2, dead: false },
+        { name: 'Krevash',  spec: 'Subtlety Rogue',  dmg: 694000, cc: 6, dead: false },
+        { name: 'Valkryn',  spec: 'Havoc Demon Hunter', dmg: 588000, cc: 2, dead: false },
+        { name: 'Esharen',  spec: 'Holy Priest',      dmg: 41000,  cc: 3, dead: true  },
+        { name: 'Perdaxis', spec: 'Arcane Mage',      dmg: 510000, cc: 4, dead: false },
+        { name: 'Torven',   spec: 'Arms Warrior',     dmg: 481000, cc: 1, dead: false },
+        { name: 'Crystyn',  spec: 'Restoration Shaman', dmg: 35000, cc: 2, dead: false },
       ],
       events: [
-        { type:'CC', source:'Krevash', dest:'Crystyn', spell:'Sap', drCategory:'incapacitate', drMultiplier:1.0, desc:'Krevash → Sap on Crystyn', flag:null, t:1 },
-        { type:'CC', source:'Krevash', dest:'Esharen', spell:'Cheap Shot', drCategory:'stun', drMultiplier:1.0, desc:'Krevash → Cheap Shot on Esharen', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Shadow Dance', cdType:'offensive', desc:'Krevash used Shadow Dance', flag:null, t:3 },
-        { type:'COOLDOWN', source:'Krevash', dest:'', spell:'Symbols of Death', cdType:'offensive', desc:'Krevash used Symbols of Death', flag:null, t:3 },
-        { type:'CC', source:'Perdaxis', dest:'Crystyn', spell:'Polymorph', drCategory:'incapacitate', drMultiplier:0.5, desc:'Perdaxis → Polymorph on Crystyn (DR 50%)', flag:'DR: 50% duration', t:6 },
-        { type:'CC', source:'Valkryn', dest:'Esharen', spell:'Chaos Nova', drCategory:'stun', drMultiplier:0.5, desc:'Valkryn → Chaos Nova on Esharen (DR 50%)', flag:'DR: 50% duration', t:8 },
-        { type:'CC', source:'Krevash', dest:'Crystyn', spell:'Blind', drCategory:'incapacitate', drMultiplier:0.25, desc:'Krevash → Blind on Crystyn (DR 25%)', flag:'DR: 25% duration', t:14 },
-        { type:'CC', source:'Krevash', dest:'Esharen', spell:'Kidney Shot', drCategory:'stun', drMultiplier:0.25, desc:'Krevash → Kidney Shot on Esharen (DR 25%)', flag:'DR: 25% duration', t:18 },
-        { type:'DEATH', source:'Esharen', dest:'', spell:'', desc:'Esharen died', flag:null, t:30 },
+        { type:'CC',       source:'Krevash', dest:'Crystyn', spell:'Sap',             drCategory:'incapacitate',drMultiplier:1.0, desc:'Krevash → Sap on Crystyn', flag:null, t:1  },
+        { type:'CC',       source:'Krevash', dest:'Esharen', spell:'Cheap Shot',      drCategory:'stun',        drMultiplier:1.0, desc:'Krevash → Cheap Shot on Esharen', flag:null, t:3 },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Shadow Dance',    cdType:'offensive',        desc:'Krevash used Shadow Dance', flag:null, t:3  },
+        { type:'COOLDOWN', source:'Krevash', dest:'',        spell:'Symbols of Death',cdType:'offensive',        desc:'Krevash used Symbols of Death', flag:null, t:4 },
+        { type:'CC',       source:'Perdaxis',dest:'Crystyn', spell:'Polymorph',       drCategory:'incapacitate',drMultiplier:0.5, desc:'Perdaxis → Polymorph on Crystyn', flag:null, t:6  },
+        { type:'CC',       source:'Valkryn', dest:'Esharen', spell:'Chaos Nova',      drCategory:'stun',        drMultiplier:0.5, desc:'Valkryn → Chaos Nova on Esharen', flag:null, t:8  },
+        { type:'CC',       source:'Krevash', dest:'Crystyn', spell:'Blind',           drCategory:'incapacitate',drMultiplier:0.25,desc:'Krevash → Blind on Crystyn', flag:null, t:14 },
+        { type:'CC',       source:'Krevash', dest:'Esharen', spell:'Kidney Shot',     drCategory:'stun',        drMultiplier:0.25,desc:'Krevash → Kidney Shot on Esharen', flag:null, t:18 },
+        { type:'DEATH',    source:'Esharen', dest:'',        spell:'',                desc:'Esharen died',       flag:null, t:30 },
       ],
-      mistakes: [
-        { severity:'LOW', category:'DR', title:'Polymorph and Blind hit reduced DR on Crystyn', desc:'Crystyn received Sap at 0:01 then Polymorph at 0:06 (50% DR) then Blind at 0:14 (25% DR). Despite this, the kill still came through at 0:30.', tip:'The kill was secured so this is low priority. For cleaner execution, switch to silence or off-DR-category healer CC after the opener to maintain full-duration lockout.', at:'0:06' },
-      ]
     }),
   ];
 }
