@@ -1068,4 +1068,190 @@ const StrategyKB = {
   },
 };
 
-if (typeof module !== 'undefined') module.exports = StrategyKB;
+// ============================================================
+// DR CATEGORY MAP
+// Log spell name fragments → DR category
+// Kept in KB because it IS strategy knowledge:
+// knowing which spells share DR is what players need to learn.
+// ============================================================
+
+const DR_CATEGORIES = {
+  stun: [
+    'CHEAP_SHOT','CHEAPSHOT','KIDNEY_SHOT','HAMMER_OF_JUSTICE','STORM_BOLT',
+    'CHARGE_STUN','WAR_STOMP','BASH','MIGHTY_BASH','MAIM','INTIMIDATION',
+    'SHADOWFURY','REMORSELESS_WINTER','CHAOS_NOVA','LEG_SWEEP','PARALYSIS',
+    'ASPHYXIATE','GNAW','AXE_TOSS','CAPACITOR_TOTEM','SHOCKWAVE',
+    'IMPACT','DEEP_FREEZE','INTERCEPT','INTERCEPT_STUN',
+  ],
+  incapacitate: [
+    'SAP','BLIND','GOUGE','POLYMORPH','HEX','FREEZING_TRAP','FREEZE',
+    'REPENTANCE','IMPRISON','PARALYSIS','INCAPACITATING_ROAR',
+    'TURN_EVIL','MIND_CONTROL','SEDUCTION','SLEEP','HIBERNATE',
+    'HOLY_WORD_CHASTISE','DRAGON_S_BREATH',
+  ],
+  disorient: [
+    'FEAR','HOWL_OF_TERROR','PSYCHIC_SCREAM','INTIMIDATING_SHOUT',
+    'DEATH_COIL','CYCLONE','OPPRESSING_ROAR','MORTAL_COIL',
+    'SIGIL_OF_MISERY','BLINDING_LIGHT',
+  ],
+  silence: [
+    'SILENCE','COUNTERSPELL','KICK','PUMMEL','MIND_FREEZE','WIND_SHEAR',
+    'SOLAR_BEAM','REBUKE','SKULL_BASH','SIGIL_OF_SILENCE','GARROTE',
+    'AVENGERS_SHIELD','STRANGULATE',
+  ],
+  root: [
+    'ENTANGLING_ROOTS','FROST_NOVA','FREEZE','EARTHBIND','CHAINS_OF_ICE',
+    'FROSTBITE','BINDING_SHOT','GRASPING_VINES','THUNDERSTRUCK',
+    'LANDSLIDE','RING_OF_FROST',
+  ],
+};
+
+const DR_DECAY = 18000; // ms until a DR category fully resets
+
+// ============================================================
+// COOLDOWN REGISTRY
+// Every trackable major cooldown.
+// The parser reads this directly — add a CD here and it gets
+// detected in logs and appears in analysis automatically.
+// type: 'offensive' | 'defensive' | 'utility'
+// duration: approximate buff duration in ms (for timeline bar width)
+// specs: which spec keys this belongs to (informational)
+// ============================================================
+
+const COOLDOWN_REGISTRY = {
+  // ── Rogue ──
+  'SYMBOLS_OF_DEATH':       { name: 'Symbols of Death',            type: 'offensive',  duration: 45000, specs: ['subtlety_rogue'] },
+  'SHADOW_DANCE':           { name: 'Shadow Dance',                 type: 'offensive',  duration:  8000, specs: ['subtlety_rogue'] },
+  'VENDETTA':               { name: 'Vendetta',                     type: 'offensive',  duration: 20000, specs: ['assassination_rogue'] },
+  'KINGSBANE':              { name: 'Kingsbane',                    type: 'offensive',  duration: 14000, specs: ['assassination_rogue'] },
+  'ADRENALINE_RUSH':        { name: 'Adrenaline Rush',              type: 'offensive',  duration: 20000, specs: ['outlaw_rogue'] },
+  'BETWEEN_THE_EYES':       { name: 'Between the Eyes',             type: 'offensive',  duration:  3000, specs: ['outlaw_rogue'] },
+  'EVASION':                { name: 'Evasion',                      type: 'defensive',  duration: 10000, specs: ['subtlety_rogue','assassination_rogue','outlaw_rogue'] },
+  'CLOAK_OF_SHADOWS':       { name: 'Cloak of Shadows',             type: 'defensive',  duration:  5000, specs: ['subtlety_rogue','assassination_rogue','outlaw_rogue'] },
+  'VANISH':                 { name: 'Vanish',                       type: 'utility',    duration:  3000, specs: ['subtlety_rogue','assassination_rogue','outlaw_rogue'] },
+
+  // ── Mage ──
+  'COMBUSTION':             { name: 'Combustion',                   type: 'offensive',  duration: 12000, specs: ['fire_mage'] },
+  'ICY_VEINS':              { name: 'Icy Veins',                    type: 'offensive',  duration: 25000, specs: ['frost_mage'] },
+  'ARCANE_SURGE':           { name: 'Arcane Surge',                 type: 'offensive',  duration: 15000, specs: ['arcane_mage'] },
+  'TOUCH_OF_THE_MAGI':      { name: 'Touch of the Magi',            type: 'offensive',  duration: 10000, specs: ['arcane_mage'] },
+  'ICE_BLOCK':              { name: 'Ice Block',                    type: 'defensive',  duration: 10000, specs: ['fire_mage','frost_mage','arcane_mage'] },
+  'COLD_SNAP':              { name: 'Cold Snap',                    type: 'defensive',  duration:     0, specs: ['frost_mage'] },
+  'SHIFTING_POWER':         { name: 'Shifting Power',               type: 'utility',    duration:  4000, specs: ['fire_mage','frost_mage','arcane_mage'] },
+
+  // ── Warrior ──
+  'RECKLESSNESS':           { name: 'Recklessness',                 type: 'offensive',  duration: 12000, specs: ['arms_warrior','fury_warrior'] },
+  'AVATAR':                 { name: 'Avatar',                       type: 'offensive',  duration: 20000, specs: ['arms_warrior','fury_warrior','protection_warrior'] },
+  'BLADESTORM':             { name: 'Bladestorm',                   type: 'offensive',  duration:  6000, specs: ['arms_warrior'] },
+  'SPEAR_OF_BASTION':       { name: 'Spear of Bastion',             type: 'offensive',  duration:  4000, specs: ['arms_warrior'] },
+  'RAVAGER':                { name: 'Ravager',                      type: 'offensive',  duration:  7000, specs: ['arms_warrior','protection_warrior'] },
+  'COLOSSUS_SMASH':         { name: 'Colossus Smash',               type: 'offensive',  duration:  8000, specs: ['arms_warrior'] },
+  'WARBREAKER':             { name: 'Warbreaker',                   type: 'offensive',  duration:  8000, specs: ['arms_warrior'] },
+  'DIE_BY_THE_SWORD':       { name: 'Die by the Sword',             type: 'defensive',  duration:  8000, specs: ['arms_warrior'] },
+  'SPELL_REFLECTION':       { name: 'Spell Reflection',             type: 'defensive',  duration:  5000, specs: ['arms_warrior','fury_warrior','protection_warrior'] },
+  'RALLYING_CRY':           { name: 'Rallying Cry',                 type: 'defensive',  duration: 10000, specs: ['arms_warrior','fury_warrior','protection_warrior'] },
+
+  // ── Paladin ──
+  'AVENGING_WRATH':         { name: 'Avenging Wrath',               type: 'offensive',  duration: 20000, specs: ['retribution_paladin','holy_paladin'] },
+  'WINGS':                  { name: 'Avenging Wrath',               type: 'offensive',  duration: 20000, specs: ['retribution_paladin','holy_paladin'] },
+  'DIVINE_TOLL':            { name: 'Divine Toll',                  type: 'offensive',  duration:     0, specs: ['retribution_paladin','holy_paladin'] },
+  'EXECUTION_SENTENCE':     { name: 'Execution Sentence',           type: 'offensive',  duration:  8000, specs: ['retribution_paladin'] },
+  'DIVINE_SHIELD':          { name: 'Divine Shield',                type: 'defensive',  duration:  8000, specs: ['holy_paladin','retribution_paladin','protection_paladin'] },
+  'BLESSING_OF_PROTECTION': { name: 'Blessing of Protection',       type: 'defensive',  duration: 10000, specs: ['holy_paladin','retribution_paladin','protection_paladin'] },
+  'LAY_ON_HANDS':           { name: 'Lay on Hands',                 type: 'defensive',  duration:     0, specs: ['holy_paladin'] },
+  'AURA_MASTERY':           { name: 'Aura Mastery',                 type: 'defensive',  duration:  8000, specs: ['holy_paladin'] },
+
+  // ── Priest ──
+  'VOID_ERUPTION':          { name: 'Voidform',                     type: 'offensive',  duration: 15000, specs: ['shadow_priest'] },
+  'DARK_ASCENSION':         { name: 'Dark Ascension',               type: 'offensive',  duration: 20000, specs: ['shadow_priest'] },
+  'PAIN_SUPPRESSION':       { name: 'Pain Suppression',             type: 'defensive',  duration:  8000, specs: ['discipline_priest'] },
+  'RAPTURE':                { name: 'Rapture',                      type: 'defensive',  duration: 10000, specs: ['discipline_priest'] },
+  'POWER_WORD_BARRIER':     { name: 'Power Word: Barrier',          type: 'defensive',  duration: 10000, specs: ['discipline_priest'] },
+  'DISPERSION':             { name: 'Dispersion',                   type: 'defensive',  duration:  6000, specs: ['shadow_priest'] },
+  'GUARDIAN_SPIRIT':        { name: 'Guardian Spirit',              type: 'defensive',  duration: 10000, specs: ['holy_priest'] },
+  'APOTHEOSIS':             { name: 'Apotheosis',                   type: 'offensive',  duration: 20000, specs: ['holy_priest'] },
+
+  // ── Druid ──
+  'CELESTIAL_ALIGNMENT':    { name: 'Celestial Alignment',          type: 'offensive',  duration: 20000, specs: ['balance_druid'] },
+  'INCARNATION_CHOSEN':     { name: 'Incarnation: Chosen of Elune', type: 'offensive',  duration: 30000, specs: ['balance_druid'] },
+  'BERSERK':                { name: 'Berserk',                      type: 'offensive',  duration: 20000, specs: ['feral_druid','guardian_druid'] },
+  'INCARNATION_KING':       { name: 'Incarnation: King of the Jungle', type: 'offensive', duration: 30000, specs: ['feral_druid'] },
+  'TRANQUILITY':            { name: 'Tranquility',                  type: 'defensive',  duration:  8000, specs: ['restoration_druid'] },
+  'IRONBARK':               { name: 'Ironbark',                     type: 'defensive',  duration: 12000, specs: ['restoration_druid','feral_druid','balance_druid'] },
+  'BARKSKIN':               { name: 'Barkskin',                     type: 'defensive',  duration: 12000, specs: ['balance_druid','feral_druid','guardian_druid','restoration_druid'] },
+  'CONVOKE_THE_SPIRITS':    { name: 'Convoke the Spirits',          type: 'offensive',  duration:  4000, specs: ['balance_druid','feral_druid','restoration_druid'] },
+
+  // ── Shaman ──
+  'ASCENDANCE_ELE':         { name: 'Ascendance',                   type: 'offensive',  duration: 15000, specs: ['elemental_shaman'] },
+  'ASCENDANCE_ENH':         { name: 'Ascendance',                   type: 'offensive',  duration: 15000, specs: ['enhancement_shaman'] },
+  'STORMKEEPER':            { name: 'Stormkeeper',                  type: 'offensive',  duration: 15000, specs: ['elemental_shaman'] },
+  'FERAL_SPIRIT':           { name: 'Feral Spirit',                 type: 'offensive',  duration: 15000, specs: ['enhancement_shaman'] },
+  'PRIMORDIAL_WAVE':        { name: 'Primordial Wave',              type: 'offensive',  duration:     0, specs: ['enhancement_shaman','restoration_shaman'] },
+  'SPIRIT_LINK_TOTEM':      { name: 'Spirit Link Totem',            type: 'defensive',  duration:  6000, specs: ['restoration_shaman'] },
+  'EARTHEN_WALL_TOTEM':     { name: 'Earthen Wall Totem',           type: 'defensive',  duration: 15000, specs: ['restoration_shaman'] },
+  'ANCESTRAL_GUIDANCE':     { name: 'Ancestral Guidance',           type: 'defensive',  duration: 10000, specs: ['restoration_shaman','elemental_shaman'] },
+
+  // ── Hunter ──
+  'BESTIAL_WRATH':          { name: 'Bestial Wrath',                type: 'offensive',  duration: 15000, specs: ['beast_mastery_hunter'] },
+  'TRUESHOT':               { name: 'Trueshot',                     type: 'offensive',  duration: 15000, specs: ['marksmanship_hunter'] },
+  'COORDINATED_ASSAULT':    { name: 'Coordinated Assault',          type: 'offensive',  duration: 20000, specs: ['survival_hunter'] },
+  'ASPECT_OF_THE_TURTLE':   { name: 'Aspect of the Turtle',         type: 'defensive',  duration:  8000, specs: ['beast_mastery_hunter','marksmanship_hunter','survival_hunter'] },
+  'EXHILARATION':           { name: 'Exhilaration',                 type: 'defensive',  duration:     0, specs: ['beast_mastery_hunter','marksmanship_hunter','survival_hunter'] },
+
+  // ── Warlock ──
+  'SUMMON_INFERNAL':        { name: 'Summon Infernal',              type: 'offensive',  duration: 30000, specs: ['destruction_warlock'] },
+  'DARK_SOUL_INSTABILITY':  { name: 'Dark Soul: Instability',       type: 'offensive',  duration: 20000, specs: ['destruction_warlock'] },
+  'DARK_SOUL_MISERY':       { name: 'Dark Soul: Misery',            type: 'offensive',  duration: 20000, specs: ['affliction_warlock'] },
+  'DARKGLARE':              { name: 'Summon Darkglare',             type: 'offensive',  duration: 20000, specs: ['affliction_warlock'] },
+  'SUMMON_DARKGLARE':       { name: 'Summon Darkglare',             type: 'offensive',  duration: 20000, specs: ['affliction_warlock'] },
+  'TYRANT':                 { name: 'Demonic Tyrant',               type: 'offensive',  duration: 15000, specs: ['demonology_warlock'] },
+  'SUMMON_DEMONIC_TYRANT':  { name: 'Demonic Tyrant',               type: 'offensive',  duration: 15000, specs: ['demonology_warlock'] },
+  'UNENDING_RESOLVE':       { name: 'Unending Resolve',             type: 'defensive',  duration:  8000, specs: ['affliction_warlock','destruction_warlock','demonology_warlock'] },
+
+  // ── Death Knight ──
+  'PILLAR_OF_FROST':        { name: 'Pillar of Frost',              type: 'offensive',  duration: 12000, specs: ['frost_dk'] },
+  'EMPOWER_RUNE_WEAPON':    { name: 'Empower Rune Weapon',          type: 'offensive',  duration: 20000, specs: ['frost_dk'] },
+  'APOCALYPSE':             { name: 'Apocalypse',                   type: 'offensive',  duration:     0, specs: ['unholy_dk'] },
+  'DARK_TRANSFORMATION':    { name: 'Dark Transformation',          type: 'offensive',  duration: 20000, specs: ['unholy_dk'] },
+  'ARMY_OF_THE_DEAD':       { name: 'Army of the Dead',             type: 'offensive',  duration: 40000, specs: ['unholy_dk'] },
+  'ICEBOUND_FORTITUDE':     { name: 'Icebound Fortitude',           type: 'defensive',  duration:  8000, specs: ['frost_dk','unholy_dk','blood_dk'] },
+  'VAMPIRIC_BLOOD':         { name: 'Vampiric Blood',               type: 'defensive',  duration: 10000, specs: ['blood_dk'] },
+  'ANTI_MAGIC_SHELL':       { name: 'Anti-Magic Shell',             type: 'defensive',  duration:  5000, specs: ['frost_dk','unholy_dk','blood_dk'] },
+
+  // ── Demon Hunter ──
+  'METAMORPHOSIS':          { name: 'Metamorphosis',                type: 'offensive',  duration: 30000, specs: ['havoc_dh'] },
+  'EYE_BEAM':               { name: 'Eye Beam',                     type: 'offensive',  duration:  3000, specs: ['havoc_dh'] },
+  'BLUR':                   { name: 'Blur',                         type: 'defensive',  duration: 10000, specs: ['havoc_dh'] },
+  'DARKNESS':               { name: 'Darkness',                     type: 'defensive',  duration:  8000, specs: ['havoc_dh','vengeance_dh'] },
+  'FIERY_BRAND':            { name: 'Fiery Brand',                  type: 'defensive',  duration: 10000, specs: ['vengeance_dh'] },
+  'DEMON_SPIKES':           { name: 'Demon Spikes',                 type: 'defensive',  duration:  6000, specs: ['vengeance_dh'] },
+
+  // ── Monk ──
+  'STORM_EARTH_AND_FIRE':   { name: 'Storm, Earth, and Fire',       type: 'offensive',  duration: 15000, specs: ['windwalker_monk'] },
+  'SERENITY':               { name: 'Serenity',                     type: 'offensive',  duration: 12000, specs: ['windwalker_monk'] },
+  'TOUCH_OF_DEATH':         { name: 'Touch of Death',               type: 'offensive',  duration:     0, specs: ['windwalker_monk'] },
+  'INVOKE_XUEN':            { name: 'Invoke Xuen',                  type: 'offensive',  duration: 24000, specs: ['windwalker_monk'] },
+  'LIFE_COCOON':            { name: 'Life Cocoon',                  type: 'defensive',  duration: 12000, specs: ['mistweaver_monk'] },
+  'REVIVAL':                { name: 'Revival',                      type: 'defensive',  duration:     0, specs: ['mistweaver_monk'] },
+  'INVOKE_YULON':           { name: 'Invoke Yu\'lon',               type: 'defensive',  duration: 25000, specs: ['mistweaver_monk'] },
+  'FORTIFYING_BREW':        { name: 'Fortifying Brew',              type: 'defensive',  duration: 15000, specs: ['brewmaster_monk'] },
+  'ZEN_MEDITATION':         { name: 'Zen Meditation',               type: 'defensive',  duration:  8000, specs: ['brewmaster_monk'] },
+
+  // ── Evoker ──
+  'DRAGONRAGE':             { name: 'Dragonrage',                   type: 'offensive',  duration: 18000, specs: ['devastation_evoker'] },
+  'BREATH_OF_EONS':         { name: 'Breath of Eons',               type: 'offensive',  duration: 10000, specs: ['augmentation_evoker'] },
+  'EBON_MIGHT':             { name: 'Ebon Might',                   type: 'offensive',  duration: 10000, specs: ['augmentation_evoker'] },
+  'REWIND':                 { name: 'Rewind',                       type: 'defensive',  duration:     0, specs: ['preservation_evoker'] },
+  'OBSIDIAN_SCALES':        { name: 'Obsidian Scales',              type: 'defensive',  duration: 12000, specs: ['devastation_evoker','augmentation_evoker'] },
+  'TIME_SPIRAL':            { name: 'Time Spiral',                  type: 'utility',    duration:     0, specs: ['preservation_evoker'] },
+
+  // ── Racials ──
+  'BERSERKING':             { name: 'Berserking',                   type: 'offensive',  duration: 12000, specs: [] },
+  'BLOOD_FURY':             { name: 'Blood Fury',                   type: 'offensive',  duration: 15000, specs: [] },
+  'ARCANE_TORRENT':         { name: 'Arcane Torrent',               type: 'utility',    duration:     0, specs: [] },
+};
+
+// Fast lookup set used by the parser hot path
+const CD_SPELL_NAMES = new Set(Object.keys(COOLDOWN_REGISTRY));
+
+if (typeof module !== 'undefined') module.exports = { StrategyKB, DR_CATEGORIES, DR_DECAY, COOLDOWN_REGISTRY, CD_SPELL_NAMES };
